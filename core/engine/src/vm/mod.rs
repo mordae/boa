@@ -16,8 +16,11 @@ use crate::{
     vm::shadow_stack::ErrorStack,
 };
 use boa_gc::{Finalize, Gc, Trace, custom_trace};
+use portable_atomic::AtomicBool;
 use shadow_stack::ShadowStack;
-use std::{future::Future, ops::ControlFlow, path::Path, pin::Pin, task};
+use std::{
+    future::Future, ops::ControlFlow, path::Path, pin::Pin, sync::Arc, sync::atomic::Ordering, task,
+};
 
 #[cfg(feature = "trace")]
 use crate::sys::time::Instant;
@@ -82,6 +85,13 @@ pub struct Vm {
     /// This eliminates the conversion between [`crate::JsNativeError`] and [`crate::JsValue`] if not needed.
     pub(crate) pending_exception: Option<JsError>,
     pub(crate) runtime_limits: RuntimeLimits,
+
+    /// Flag used to interrupt the currently executing bytecode.
+    ///
+    /// When set to `true` from another thread, the next loop iteration or function
+    /// call throws a non-catchable [`RuntimeLimitError::Interrupted`], terminating
+    /// the evaluation.
+    pub(crate) interrupt: Arc<AtomicBool>,
 
     /// This is used to assign a native (rust) function as the active function,
     /// because we don't push a frame for them.
@@ -418,6 +428,7 @@ impl Vm {
             return_value: JsValue::undefined(),
             pending_exception: None,
             runtime_limits: RuntimeLimits::default(),
+            interrupt: Arc::new(AtomicBool::new(false)),
             native_active_function: None,
             host_call_depth: 0,
             shadow_stack: ShadowStack::default(),
@@ -1015,6 +1026,11 @@ impl Context {
 
     /// Checks if we haven't exceeded the defined runtime limits.
     pub(crate) fn check_runtime_limits(&self) -> JsResult<()> {
+        // Must throw if the execution has been interrupted by an external request.
+        if self.vm.interrupt.load(Ordering::Relaxed) {
+            return Err(RuntimeLimitError::Interrupted.into());
+        }
+
         // Must throw if the number of recursive calls exceeds the defined limit.
         //
         // `host_call_depth` accounts for nested host calls that re-enter the VM by invoking

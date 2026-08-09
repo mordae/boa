@@ -344,6 +344,49 @@ fn loop_runtime_limit() {
 }
 
 #[test]
+fn interrupt() {
+    use std::sync::atomic::Ordering;
+
+    run_test_actions([
+        // Setting the flag interrupts a tight loop.
+        TestAction::inspect_context(|context| {
+            context.interrupt_flag().store(true, Ordering::Relaxed);
+        }),
+        TestAction::assert_runtime_limit_error(
+            indoc! {r#"
+                while (1) { }
+            "#},
+            RuntimeLimitError::Interrupted,
+        ),
+        // A function call is also an interrupt point.
+        TestAction::inspect_context(|context| {
+            context.interrupt_flag().store(true, Ordering::Relaxed);
+        }),
+        TestAction::assert_runtime_limit_error(
+            indoc! {r#"
+                function f() { return 42; }
+                f()
+            "#},
+            RuntimeLimitError::Interrupted,
+        ),
+        // Clearing the flag lets evaluation proceed.
+        TestAction::inspect_context(|context| {
+            context.interrupt_flag().store(false, Ordering::Relaxed);
+        }),
+        TestAction::assert_eq(
+            indoc! {r#"
+                let result = 0;
+                for (let i = 0; i < 10; ++i) {
+                    result += i;
+                }
+                result
+            "#},
+            45,
+        ),
+    ]);
+}
+
+#[test]
 fn recursion_runtime_limit() {
     run_test_actions([
         TestAction::run(indoc! {r#"

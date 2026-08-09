@@ -314,6 +314,9 @@ pub enum RuntimeLimitError {
     /// Error for reaching the maximum stack size
     #[error("reached the maximum stack size on this execution")]
     StackSize,
+    /// Error for when the execution is interrupted by an external request.
+    #[error("execution was interrupted by an external request")]
+    Interrupted,
 }
 
 /// Internal panic error.
